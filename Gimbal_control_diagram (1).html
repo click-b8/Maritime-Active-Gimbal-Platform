@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WAM-V Platform Stabilization — Control Flow Diagram</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  [data-theme="dark"] {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --imu2:       #388bfd; --imu2-dim:   #1a3a6b; --imu2-text:  #79c0ff;
+    --imu1:       #3fb950; --imu1-dim:   #1a4022; --imu1-text:  #7ee787;
+    --pid:        #a371f7; --pid-dim:    #3a1f72; --pid-text:   #d2a8ff;
+    --blend:      #f78166; --blend-dim:  #5e2419; --blend-text: #ffa198;
+    --act:        #e3b341; --act-dim:    #5a4010; --act-text:   #f0c75e;
+    --gray-node:  #1c2129; --gray-text:  #8b949e;
+  }
+
+  [data-theme="light"] {
+    --bg:        #f6f8fa;
+    --surface:   #ffffff;
+    --border:    #d0d7de;
+    --text:      #1f2328;
+    --muted:     #57606a;
+    --imu2:       #0969da; --imu2-dim:   #dbeafe; --imu2-text:  #0550ae;
+    --imu1:       #1a7f37; --imu1-dim:   #dcfce7; --imu1-text:  #116329;
+    --pid:        #7c3aed; --pid-dim:    #ede9fe; --pid-text:   #5b21b6;
+    --blend:      #cf4f2c; --blend-dim:  #ffe4dc; --blend-text: #8d2b12;
+    --act:        #9a6700; --act-dim:    #fef3c7; --act-text:   #6f4f00;
+    --gray-node:  #eaeef2; --gray-text:  #57606a;
+  }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: 'IBM Plex Sans', sans-serif;
+    min-height: 100vh; padding: 40px 32px 60px;
+    transition: background .25s, color .25s;
+  }
+
+  .theme-toggle {
+    position: fixed; top: 20px; right: 24px;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 16px;
+    cursor: pointer; font-size: 12px;
+    font-family: 'IBM Plex Mono', monospace; color: var(--muted);
+    z-index: 100; transition: background .25s, border-color .25s, color .25s;
+    user-select: none;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--muted); }
+
+  header {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px; margin-bottom: 36px;
+    display: flex; flex-direction: column; gap: 6px;
+    padding-right: 160px;
+    transition: border-color .25s;
+  }
+  header .label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+    letter-spacing: 2px; color: var(--muted); text-transform: uppercase;
+  }
+  header h1 { font-size: 22px; font-weight: 600; letter-spacing: -.3px; }
+  header p  { font-size: 13px; color: var(--muted); max-width: 640px; line-height: 1.6; }
+
+  .row-label {
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+    letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px;
+    padding-left: 6px; border-left: 2px solid var(--border);
+    transition: border-color .25s;
+  }
+
+  .flow-section { padding: 24px 0 20px; border-bottom: 1px solid var(--border); transition: border-color .25s; }
+  .flow-section:last-of-type { border-bottom: none; }
+
+  .flow-row {
+    display: flex; align-items: center;
+    flex-wrap: nowrap; min-height: 64px;
+    overflow-x: auto; padding-bottom: 4px;
+  }
+
+  .node {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    border-radius: 8px; padding: 10px 14px;
+    min-width: 110px; text-align: center;
+    border: 1.5px solid transparent; flex-shrink: 0;
+    transition: background .25s, border-color .25s, color .25s;
+  }
+  .node .node-label { font-size: 12px; font-weight: 600; font-family: 'IBM Plex Mono', monospace; line-height: 1.2; }
+  .node .node-sub   { font-size: 10px; font-weight: 400; margin-top: 3px; opacity: .8; line-height: 1.3; }
+
+  .node-imu2  { background: var(--imu2-dim);  border-color: var(--imu2);  color: var(--imu2-text); }
+  .node-imu1  { background: var(--imu1-dim);  border-color: var(--imu1);  color: var(--imu1-text); }
+  .node-pid   { background: var(--pid-dim);   border-color: var(--pid);   color: var(--pid-text);  }
+  .node-blend { background: var(--blend-dim); border-color: var(--blend); color: var(--blend-text);}
+  .node-act   { background: var(--act-dim);   border-color: var(--act);   color: var(--act-text);  }
+  .node-gray  { background: var(--gray-node); border-color: var(--border); color: var(--gray-text);}
+
+  .node-sum {
+    width: 52px; min-width: 52px; height: 52px;
+    border-radius: 50%; font-size: 22px; font-weight: 300;
+    padding: 0; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .sum-gray  { background: var(--gray-node); border-color: var(--border); color: var(--gray-text); }
+  .sum-blend { background: var(--blend-dim); border-color: var(--blend);  color: var(--blend-text);}
+
+  .arrow { display: flex; align-items: center; flex-shrink: 0; position: relative; }
+  .arrow-line {
+    height: 2px; background: var(--border);
+    position: relative; display: flex; align-items: center;
+    transition: background .25s;
+  }
+  .arrow-line::after {
+    content: ''; position: absolute; right: -1px;
+    width: 0; height: 0;
+    border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+  }
+  .arr-imu2  .arrow-line { background: var(--imu2); }  .arr-imu2  .arrow-line::after { border-left: 8px solid var(--imu2); }
+  .arr-imu1  .arrow-line { background: var(--imu1); }  .arr-imu1  .arrow-line::after { border-left: 8px solid var(--imu1); }
+  .arr-pid   .arrow-line { background: var(--pid);  }  .arr-pid   .arrow-line::after { border-left: 8px solid var(--pid);  }
+  .arr-blend .arrow-line { background: var(--blend);}  .arr-blend .arrow-line::after { border-left: 8px solid var(--blend);}
+  .arr-act   .arrow-line { background: var(--act);  }  .arr-act   .arrow-line::after { border-left: 8px solid var(--act);  }
+  .arr-gray  .arrow-line { background: var(--muted);}  .arr-gray  .arrow-line::after { border-left: 8px solid var(--muted);}
+
+  .arrow .arr-label {
+    position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
+    font-family: 'IBM Plex Mono', monospace; font-size: 10px;
+    white-space: nowrap; color: var(--muted);
+  }
+  .arr-xs .arrow-line { width: 24px; } .arr-sm .arrow-line { width: 40px; }
+  .arr-md .arrow-line { width: 56px; } .arr-lg .arrow-line { width: 72px; }
+  .arr-xl .arrow-line { width: 96px; }
+
+  .flow-svg-wrap { width: 100%; overflow-x: auto; margin-top: 8px; }
+  .flow-svg-wrap svg { display: block; border: 1px solid var(--border); border-radius: 10px; transition: border-color .25s; }
+
+  .eq-panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px 24px; margin-top: 32px;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: background .25s, border-color .25s;
+  }
+  .eq-title { font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+  .eq-main  { font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; letter-spacing: .3px; }
+  .eq-main .ff-term    { color: var(--imu2);  }
+  .eq-main .fb-term    { color: var(--imu1);  }
+  .eq-main .blend-term { color: var(--blend); }
+  .eq-sub  { font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: var(--muted); line-height: 1.9; }
+  .eq-sub span { color: var(--text); }
+
+  .alpha-note {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--blend); border-radius: 6px;
+    padding: 12px 16px; margin-top: 24px;
+    font-size: 12px; color: var(--muted); line-height: 1.7;
+    transition: background .25s, border-color .25s;
+  }
+  .alpha-note b { color: var(--text); font-weight: 500; }
+
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 12px 24px;
+    margin-top: 28px; padding: 18px 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px;
+    transition: background .25s, border-color .25s;
+  }
+  .legend-title { width: 100%; font-family: 'IBM Plex Mono', monospace; font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .legend-item  { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .legend-swatch{ width: 28px; height: 3px; border-radius: 2px; flex-shrink: 0; }
+  .legend-dot   { width: 12px; height: 12px; border-radius: 50%; border: 2px solid; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="toggleTheme()">
+  <span id="toggleIcon">☀️</span>
+  <span id="toggleLabel">Light mode</span>
+</button>
+
+<header>
+  <span class="label">Control System Architecture</span>
+  <h1>WAM-V Drone Landing Platform Stabilization</h1>
+  <p>PID + Feedforward hybrid control. IMU 2 (WAM-V hull) provides anticipatory feedforward. IMU 1 (landing platform) closes the corrective PID feedback loop. Blend weight α tunes the authority of each path.</p>
+</header>
+
+<!-- SECTION 1 -->
+<div class="flow-section">
+  <div class="row-label">01 — disturbance sensing</div>
+  <div class="flow-row">
+    <div class="node node-gray" style="min-width:100px"><span class="node-label">Ocean Waves</span><span class="node-sub">disturbance source</span></div>
+    <div class="arrow arr-gray arr-md"><div class="arrow-line"><span class="arr-label">hull motion</span></div></div>
+    <div class="node node-imu2" style="min-width:120px"><span class="node-label">IMU 2</span><span class="node-sub">WAM-V base platform</span></div>
+    <div class="arrow arr-imu2 arr-md"><div class="arrow-line"><span class="arr-label">θ̈_hull</span></div></div>
+    <div class="node node-imu2" style="min-width:140px"><span class="node-label">FF Model  C⁻¹</span><span class="node-sub">inverse dynamics</span></div>
+    <div class="arrow arr-imu2 arr-md"><div class="arrow-line"><span class="arr-label">T_FF</span></div></div>
+    <div class="node node-imu2" style="min-width:80px"><span class="node-label">× α</span><span class="node-sub">blend weight</span></div>
+    <div class="arrow arr-imu2 arr-lg"><div class="arrow-line"><span class="arr-label">α · θ̈_FF</span></div></div>
+    <div class="node node-sum sum-blend">Σ</div>
+  </div>
+</div>
+
+<!-- SECTION 2 -->
+<div class="flow-section">
+  <div class="row-label">02 — feedback correction</div>
+  <div class="flow-row">
+    <div class="node node-gray" style="min-width:100px"><span class="node-label">θ_ref = 0°</span><span class="node-sub">level target</span></div>
+    <div class="arrow arr-gray arr-sm"><div class="arrow-line"></div></div>
+    <div class="node node-sum sum-gray">Σ</div>
+    <div class="arrow arr-pid arr-sm"><div class="arrow-line"><span class="arr-label">e(t)</span></div></div>
+    <div class="node node-pid" style="min-width:160px"><span class="node-label">PID Controller</span><span class="node-sub">Kp · e + Ki ∫e dt + Kd ė</span></div>
+    <div class="arrow arr-pid arr-md"><div class="arrow-line"><span class="arr-label">u_PID</span></div></div>
+    <div class="node node-imu1" style="min-width:84px"><span class="node-label">× (1−α)</span><span class="node-sub">blend weight</span></div>
+    <div class="arrow arr-imu1 arr-lg"><div class="arrow-line"><span class="arr-label">(1−α) · θ̈_FB</span></div></div>
+    <div class="node node-blend" style="min-width:80px; font-size:11px"><span class="node-label">▲ to Σ</span><span class="node-sub">blend sum above</span></div>
+  </div>
+</div>
+
+<!-- SECTION 3 -->
+<div class="flow-section">
+  <div class="row-label">03 — blended command → plant</div>
+  <div class="flow-row">
+    <div class="node node-sum sum-blend">Σ</div>
+    <div class="arrow arr-blend arr-md"><div class="arrow-line"><span class="arr-label">u(t)</span></div></div>
+    <div class="node node-act" style="min-width:160px"><span class="node-label">Actuator / Plant</span><span class="node-sub">I·θ̈ + c·θ̇ + k·θ = T</span></div>
+    <div class="arrow arr-act arr-md"><div class="arrow-line"><span class="arr-label">torque T</span></div></div>
+    <div class="node node-imu1" style="min-width:160px"><span class="node-label">Landing Platform</span><span class="node-sub">θ_platform (actual)</span></div>
+    <div class="arrow arr-imu1 arr-md"><div class="arrow-line"><span class="arr-label">θ_FB</span></div></div>
+    <div class="node node-imu1" style="min-width:120px"><span class="node-label">IMU 1</span><span class="node-sub">landing pad sensor</span></div>
+    <div class="arrow arr-imu1 arr-xl"><div class="arrow-line"><span class="arr-label">feedback → error Σ</span></div></div>
+    <div class="node node-gray" style="min-width:80px"><span class="node-label">↺ to Σ</span><span class="node-sub">row 02 error sum</span></div>
+  </div>
+</div>
+
+<!-- SVG SIGNAL FLOW -->
+<div style="margin-top:36px">
+  <div class="row-label" style="margin-bottom:14px">full signal flow — top-down view</div>
+  <div class="flow-svg-wrap">
+    <svg id="mainSvg" width="960" height="480" viewBox="0 0 960 480" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<!-- EQUATION -->
+<div class="eq-panel">
+  <div class="eq-title">Control Law</div>
+  <div class="eq-main">
+    <span class="blend-term">u(t)</span> =
+    <span class="ff-term">α · θ̈_FF</span> (IMU 2)
+    &nbsp;+&nbsp;
+    <span class="fb-term">(1 − α) · u_PID</span> (IMU 1)
+  </div>
+  <div class="eq-sub">
+    <span>α → 1</span>: full feedforward — fast, proactive, model-dependent<br>
+    <span>α → 0</span>: full PID feedback — robust, corrective, reactive<br>
+    Plant:&nbsp;<span>I·θ̈ + c·θ̇ + k·θ = T</span>
+  </div>
+</div>
+
+<!-- ALPHA NOTE -->
+<div class="alpha-note">
+  <b>Tuning note:</b> IMU 2 sees hull disturbances <em>before</em> they reach the platform — giving the feedforward path a timing advantage over pure feedback. High α exploits this anticipation. If the inverse model C⁻¹ is inaccurate (e.g., under nonlinear sea states), reduce α to let the PID correct residual error from IMU 1.
+</div>
+
+<!-- LEGEND -->
+<div class="legend" id="legend"></div>
+
+<script>
+  let dark = true;
+
+  const PAL = {
+    dark: {
+      bg:'#0d1117', rowlabel:'#484f58',
+      gray_fill:'#1c2129', gray_str:'#30363d', gray_text:'#8b949e', gray_sub:'#484f58',
+      imu2:'#388bfd', imu2_fill:'#1a3a6b', imu2_text:'#79c0ff',
+      imu1:'#3fb950', imu1_fill:'#1a4022', imu1_text:'#7ee787',
+      pid:'#a371f7',  pid_fill:'#3a1f72',  pid_text:'#d2a8ff',
+      blend:'#f78166',blend_fill:'#5e2419',blend_text:'#ffa198',
+      act:'#e3b341',  act_fill:'#5a4010',  act_text:'#f0c75e',
+    },
+    light: {
+      bg:'#f6f8fa', rowlabel:'#8c959f',
+      gray_fill:'#eaeef2', gray_str:'#d0d7de', gray_text:'#57606a', gray_sub:'#8c959f',
+      imu2:'#0969da', imu2_fill:'#dbeafe', imu2_text:'#0550ae',
+      imu1:'#1a7f37', imu1_fill:'#dcfce7', imu1_text:'#116329',
+      pid:'#7c3aed',  pid_fill:'#ede9fe',  pid_text:'#5b21b6',
+      blend:'#cf4f2c',blend_fill:'#ffe4dc',blend_text:'#8d2b12',
+      act:'#9a6700',  act_fill:'#fef3c7',  act_text:'#6f4f00',
+    }
+  };
+
+  function p() { return dark ? PAL.dark : PAL.light; }
+
+  function toggleTheme() {
+    dark = !dark;
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    document.getElementById('toggleLabel').textContent = dark ? 'Light mode' : 'Dark mode';
+    document.getElementById('toggleIcon').textContent  = dark ? '☀️' : '🌙';
+    drawSVG(); drawLegend();
+  }
+
+  const NS = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs, parent) {
+    const e = document.createElementNS(NS, tag);
+    for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+  function tx(svg, x, y, str, o={}) {
+    const t = el('text', {
+      x, y,
+      'text-anchor': o.a || 'middle',
+      'font-family': o.mono ? 'IBM Plex Mono,monospace' : 'IBM Plex Sans,sans-serif',
+      'font-size':   o.sz || 11,
+      'font-weight': o.bold ? 600 : 400,
+      fill: o.fill || p().gray_text
+    }, svg);
+    t.textContent = str; return t;
+  }
+  function box(svg,x,y,w,h,fill,stroke,sw=1.5) {
+    return el('rect',{x,y,width:w,height:h,rx:6,fill,stroke,'stroke-width':sw},svg);
+  }
+  function circ(svg,cx,cy,r,fill,stroke,sw=1.5) {
+    return el('circle',{cx,cy,r,fill,stroke,'stroke-width':sw},svg);
+  }
+  function ln(svg,x1,y1,x2,y2,stroke,sw=1.5,dash='',end='') {
+    const a={x1,y1,x2,y2,stroke,'stroke-width':sw};
+    if(dash) a['stroke-dasharray']=dash;
+    if(end)  a['marker-end']=`url(#${end})`;
+    return el('line',a,svg);
+  }
+
+  function drawSVG() {
+    const svg = document.getElementById('mainSvg');
+    svg.innerHTML = '';
+    svg.style.background = p().bg;
+    const q = p();
+
+    const defs = el('defs',{},svg);
+    for(const [id,col] of [
+      ['ab',q.imu2],['ag',q.imu1],['ap',q.pid],
+      ['ac',q.blend],['aa',q.act],['agr',q.gray_text]
+    ]) {
+      const m = el('marker',{id,markerWidth:8,markerHeight:8,refX:7,refY:3.5,orient:'auto'},defs);
+      el('path',{d:'M0 0L7 3.5L0 7',fill:'none',stroke:col,'stroke-width':1.4},m);
+    }
+
+    tx(svg,14,86,'FF PATH',{a:'start',sz:9,mono:true,fill:q.rowlabel});
+    tx(svg,14,226,'FB PATH',{a:'start',sz:9,mono:true,fill:q.rowlabel});
+    tx(svg,14,356,'OUTPUT',{a:'start',sz:9,mono:true,fill:q.rowlabel});
+
+    /* FF ROW */
+    box(svg,46,82,90,40,q.gray_fill,q.gray_str,1);
+    tx(svg,91,98,'Ocean',{bold:true,fill:q.gray_text});
+    tx(svg,91,113,'disturbance',{sz:9,fill:q.gray_sub});
+    ln(svg,136,102,156,102,q.gray_text,1.5,'','agr');
+
+    box(svg,156,82,100,40,q.imu2_fill,q.imu2,1.5);
+    tx(svg,206,98,'IMU 2',{bold:true,mono:true,fill:q.imu2_text});
+    tx(svg,206,113,'WAM-V hull',{sz:9,fill:q.imu2});
+
+    tx(svg,288,95,'θ̈_hull',{sz:9,mono:true,fill:q.imu2});
+    ln(svg,256,102,308,102,q.imu2,1.5,'','ab');
+
+    box(svg,308,82,110,40,q.imu2_fill,q.imu2,1.5);
+    tx(svg,363,98,'FF Model C⁻¹',{bold:true,mono:true,sz:11,fill:q.imu2_text});
+    tx(svg,363,113,'inverse dynamics',{sz:9,fill:q.imu2});
+
+    tx(svg,450,95,'T_FF',{sz:9,mono:true,fill:q.imu2});
+    ln(svg,418,102,472,102,q.imu2,1.5,'','ab');
+
+    box(svg,472,82,70,40,q.imu2_fill,q.imu2,1.5);
+    tx(svg,507,98,'× α',{bold:true,mono:true,sz:13,fill:q.imu2_text});
+    tx(svg,507,113,'FF weight',{sz:9,fill:q.imu2});
+
+    tx(svg,588,95,'α·θ̈_FF',{sz:9,mono:true,fill:q.imu2});
+    ln(svg,542,102,636,102,q.imu2,1.5);
+    ln(svg,636,102,636,278,q.imu2,1.5,'5 3');
+
+    /* FB ROW */
+    box(svg,46,222,90,40,q.gray_fill,q.gray_str,1);
+    tx(svg,91,237,'θ_ref = 0',{bold:true,mono:true,fill:q.gray_text});
+    tx(svg,91,253,'level target',{sz:9,fill:q.gray_sub});
+    ln(svg,136,242,162,242,q.gray_text,1.5,'','agr');
+
+    circ(svg,180,242,18,q.gray_fill,q.gray_str,1.5);
+    tx(svg,180,249,'Σ',{sz:18,fill:q.gray_text});
+    tx(svg,168,236,'+',{sz:9,fill:q.gray_text});
+    tx(svg,178,228,'−',{sz:9,fill:q.imu1});
+
+    tx(svg,228,235,'e(t)',{sz:9,mono:true,fill:q.pid});
+    ln(svg,198,242,256,242,q.pid,1.5,'','ap');
+
+    box(svg,256,222,120,40,q.pid_fill,q.pid,1.5);
+    tx(svg,316,237,'PID',{bold:true,mono:true,sz:12,fill:q.pid_text});
+    tx(svg,316,253,'Kp·e + Ki∫e + Kd·ė',{sz:9,fill:q.pid});
+
+    tx(svg,418,235,'u_PID',{sz:9,mono:true,fill:q.pid});
+    ln(svg,376,242,452,242,q.pid,1.5,'','ap');
+
+    box(svg,452,222,80,40,q.imu1_fill,q.imu1,1.5);
+    tx(svg,492,237,'×(1−α)',{bold:true,mono:true,sz:12,fill:q.imu1_text});
+    tx(svg,492,253,'FB weight',{sz:9,fill:q.imu1});
+
+    tx(svg,580,235,'(1−α)·θ̈_FB',{sz:9,mono:true,fill:q.imu1});
+    ln(svg,532,242,636,242,q.imu1,1.5);
+    ln(svg,636,242,636,278,q.imu1,1.5,'5 3');
+
+    /* BLEND SUM */
+    circ(svg,636,300,22,q.blend_fill,q.blend,1.5);
+    tx(svg,636,308,'Σ',{sz:20,fill:q.blend_text});
+    tx(svg,621,293,'+',{sz:9,fill:q.imu2});
+    tx(svg,636,284,'+',{sz:9,fill:q.imu1});
+    tx(svg,694,293,'u(t)',{sz:9,mono:true,fill:q.blend});
+    ln(svg,658,300,716,300,q.blend,1.5,'','ac');
+
+    /* OUTPUT ROW */
+    box(svg,716,280,130,40,q.act_fill,q.act,1.5);
+    tx(svg,781,296,'Actuator / Plant',{bold:true,mono:true,sz:11,fill:q.act_text});
+    tx(svg,781,311,'I·θ̈ + c·θ̇ + k·θ = T',{sz:9,fill:q.act});
+
+    tx(svg,852,340,'torque T',{sz:9,mono:true,a:'start',fill:q.act});
+    ln(svg,846,320,846,355,q.act,1.5,'','aa');
+
+    box(svg,716,355,130,40,q.imu1_fill,q.imu1,1.5);
+    tx(svg,781,370,'Landing Platform',{bold:true,mono:true,sz:11,fill:q.imu1_text});
+    tx(svg,781,386,'θ_platform  (actual)',{sz:9,fill:q.imu1});
+
+    tx(svg,680,390,'θ_meas',{sz:9,mono:true,fill:q.imu1});
+    ln(svg,716,375,636,375,q.imu1,1.5,'','ag');
+
+    box(svg,516,355,110,40,q.imu1_fill,q.imu1,1.5);
+    tx(svg,571,370,'IMU 1',{bold:true,mono:true,sz:12,fill:q.imu1_text});
+    tx(svg,571,386,'landing pad',{sz:9,fill:q.imu1});
+
+    ln(svg,516,375,180,375,q.imu1,1.5,'6 3');
+    tx(svg,360,392,'θ_FB — IMU 1 feedback to error Σ and (1−α) block',{sz:9,mono:true,fill:q.imu1});
+    ln(svg,180,375,180,260,q.imu1,1.5,'','ag');
+    ln(svg,492,355,492,262,q.imu1,1,'4 3','ag');
+  }
+
+  function drawLegend() {
+    const q = p();
+    const wrap = document.getElementById('legend');
+    wrap.innerHTML = '<div class="legend-title">Color Key</div>';
+    const items = [
+      {type:'line',col:q.imu2,   label:'IMU 2 / Feedforward path (blue)'},
+      {type:'line',col:q.imu1,   label:'IMU 1 / Feedback path (green)'},
+      {type:'line',col:q.pid,    label:'PID control signal (purple)'},
+      {type:'line',col:q.blend,  label:'Blended command u(t) (coral)'},
+      {type:'line',col:q.act,    label:'Actuator / plant (amber)'},
+      {type:'line',col:q.gray_text,label:'Neutral / structural (gray)'},
+      {type:'dot', col:q.blend,  label:'Blend sum Σ node'},
+      {type:'dash',col:q.imu1,   label:'Dashed = feedback return line'},
+    ];
+    for(const item of items) {
+      const d = document.createElement('div');
+      d.className = 'legend-item';
+      if(item.type==='line') {
+        d.innerHTML=`<div class="legend-swatch" style="background:${item.col}"></div>${item.label}`;
+      } else if(item.type==='dot') {
+        d.innerHTML=`<div class="legend-dot" style="border-color:${item.col}"></div>${item.label}`;
+      } else {
+        d.innerHTML=`<div class="legend-swatch" style="background:repeating-linear-gradient(90deg,${item.col} 0,${item.col} 6px,transparent 6px,transparent 10px)"></div>${item.label}`;
+      }
+      wrap.appendChild(d);
+    }
+  }
+
+  drawSVG();
+  drawLegend();
+</script>
+</body>
+</html>
