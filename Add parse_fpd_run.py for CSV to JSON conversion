@@ -1,3 +1,22 @@
+After every run:
+bashpython3 parse_fpd_run.py fpd_tune_data_20250419_142301.csv gains.json
+This prints a summary and writes a _tracker_entry.json file next to the CSV. Then open the tracker, paste the JSON into the Import tab, check the preview (every gain, result, wave period, and amp reading auto-filled), and click Save.
+What the script extracts automatically:
+
+All gains from gains.json (preferred) or from the [GAIN CHANGE] log entries in the CSV itself as fallback
+Roll and pitch RMS reduction %, both IMU RMS values
+Peak disturbance and peak platform angles
+Max motor amps for both axes
+Median wave periods and cycle counts (same zero-crossing algorithm as your live plot)
+FF and D term peak ERPM values
+Loop Hz from the actual dt_ms column
+Auto-generates the label from the timestamp in the filename
+Guesses environment from the filename (wavetank/pool/wamv/sim)
+
+The only thing you may want to edit manually after import is the label and any mid-run notes.
+
+
+
 {
   "nbformat": 4,
   "nbformat_minor": 0,
