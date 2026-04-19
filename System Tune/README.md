@@ -1,6 +1,6 @@
-# WAM-V Stabilisation Platform — FPD Control
+# WAM-V Stabilization Platform — FPD Control
 
-Feed-forward + PD (FPD) active stabilisation for a 2-DOF (roll/pitch) gimbal
+Feed-forward + PD (FPD) active stabilization for a 2-DOF (roll/pitch) gimbal
 mounted on a WAM-V USV.  200 Hz control loop using dual BNO08x IMUs and
 CubeMars AK60-39 brushless motors.
 
