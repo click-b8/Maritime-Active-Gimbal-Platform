@@ -1,0 +1,335 @@
+"""parse_fpd_run.py — parse a fpd_tune_data_*.csv and output a tracker entry.
+
+Reads the CSV produced by main_fpd_tune.py and outputs a JSON object that
+can be pasted directly into the gains tracker (tracker/index.html).
+
+Usage
+-----
+    python3 tools/parse_fpd_run.py <csv_file> [gains.json]
+
+    csv_file  : path to a fpd_tune_data_*.csv log
+    gains.json: (optional) gains file used for the run.
+                Searched automatically in the same directory as the CSV
+                and in the current directory if not specified.
+
+Output
+------
+    - Prints a summary table to stdout
+    - Prints the tracker JSON block to stdout
+    - Writes  <csv_stem>_tracker_entry.json  next to the CSV
+
+Gain source priority
+--------------------
+    1. gains.json provided on command line
+    2. gains.json found next to the CSV
+    3. gains.json in current directory
+    4. [GAIN CHANGE] log entries embedded in the CSV (last values win)
+    5. Compiled-in DEFAULTS (with a warning)
+"""
+
+import csv
+import json
+import math
+import os
+import sys
+from pathlib import Path
+
+
+GAIN_KEYS = [
+    "ROLL_GAIN", "ROLL_KI", "ROLL_KD", "ROLL_KFF",
+    "PITCH_GAIN", "PITCH_KI", "PITCH_KD", "PITCH_KFF",
+    "MAX_I_ERPM", "MAX_D_ERPM", "MAX_ERPM", "MAX_MOTOR_AMPS",
+    "D_FILTER_ALPHA", "FF_FILTER_ALPHA", "ANGLE_FILTER_ALPHA",
+    "FF_RATE_DEADBAND_DPS", "ROLL_DEADBAND_DEG", "PITCH_DEADBAND_DEG",
+]
+
+DEFAULTS = {
+    "ROLL_GAIN": 600.0, "ROLL_KI": 3.0, "ROLL_KD": 10.0, "ROLL_KFF": 70.0,
+    "PITCH_GAIN": 300.0, "PITCH_KI": 2.0, "PITCH_KD": -5.0, "PITCH_KFF": 40.0,
+    "MAX_I_ERPM": 300.0, "MAX_D_ERPM": 600.0, "MAX_ERPM": 5000.0,
+    "MAX_MOTOR_AMPS": 10.0, "D_FILTER_ALPHA": 0.15, "FF_FILTER_ALPHA": 0.4,
+    "ANGLE_FILTER_ALPHA": 1.0, "FF_RATE_DEADBAND_DPS": 1.5,
+    "ROLL_DEADBAND_DEG": 0.5, "PITCH_DEADBAND_DEG": 1.0,
+}
+
+
+# ── Maths helpers ─────────────────────────────────────────────────────────────
+
+def rms(values: list) -> float:
+    if not values:
+        return 0.0
+    return math.sqrt(sum(v * v for v in values) / len(values))
+
+
+def median(values: list):
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2.0
+
+
+def detect_wave_periods(
+    times: list,
+    signal: list,
+    min_period: float = 0.3,
+    max_period: float = 15.0,
+    min_amp: float = 0.3,
+) -> list:
+    """Upward zero-crossing period detector — mirrors the live-plot logic."""
+    if len(times) < 4:
+        return []
+    mean_s = sum(signal) / len(signal)
+    dc = [v - mean_s for v in signal]
+    periods = []
+    last_crossing = None
+    for i in range(len(dc) - 1):
+        if dc[i] <= 0 < dc[i + 1]:
+            frac = -dc[i] / (dc[i + 1] - dc[i])
+            tc = times[i] + frac * (times[i + 1] - times[i])
+            lo, hi = max(0, i - 10), min(len(dc), i + 10)
+            amp = max(abs(v) for v in dc[lo:hi])
+            if amp >= min_amp and last_crossing is not None:
+                T = tc - last_crossing
+                if min_period < T < max_period:
+                    periods.append(T)
+            last_crossing = tc
+    return periods
+
+
+def guess_env(csv_path: str) -> str:
+    p = csv_path.lower()
+    if "wave" in p or "tank" in p:
+        return "wavetank"
+    if "pool" in p:
+        return "pool"
+    if "wam" in p or "field" in p or "sea" in p:
+        return "wamv"
+    if "sim" in p:
+        return "sim"
+    return "pool"
+
+
+def parse_gains_from_change_log(gain_event_col: list) -> dict:
+    """Extract the last set of gains seen in [GAIN CHANGE] log entries."""
+    current = {}
+    for entry in gain_event_col:
+        if not entry or "CHANGED:" not in entry:
+            continue
+        body = entry.replace("CHANGED:", "").strip()
+        for part in body.split(","):
+            part = part.strip()
+            if ":" in part and "->" in part:
+                key_part, val_part = part.split(":", 1)
+                key = key_part.strip()
+                new_val = val_part.split("->")[-1].strip()
+                if key in GAIN_KEYS:
+                    try:
+                        current[key] = float(new_val)
+                    except ValueError:
+                        pass
+    return current
+
+
+# ── Main parser ───────────────────────────────────────────────────────────────
+
+def parse_csv(csv_path: str, gains_json_path: str | None = None) -> dict:
+    csv_path = os.path.abspath(csv_path)
+    stem = Path(csv_path).stem
+
+    rows = []
+    with open(csv_path, newline="") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("CSV is empty.")
+
+    def col(name: str) -> list:
+        out = []
+        for r in rows:
+            try:
+                out.append(float(r[name]))
+            except (KeyError, ValueError):
+                pass
+        return out
+
+    def col_str(name: str) -> list:
+        return [r.get(name, "") for r in rows]
+
+    # ── Time & loop rate ──────────────────────────────────────────────────────
+    times = col("t_s")
+    duration_s = round(times[-1] - times[0], 1) if len(times) > 1 else 0.0
+    dt_vals = col("dt_ms")
+    loop_hz = round(1000.0 / (sum(dt_vals) / len(dt_vals))) if dt_vals else 200
+
+    # ── Angle channels ────────────────────────────────────────────────────────
+    r1 = col("imu1_roll_deg");   p1 = col("imu1_pitch_deg")
+    r2 = col("imu2_roll_deg");   p2 = col("imu2_pitch_deg")
+
+    rms_r1 = round(rms(r1), 3);  rms_r2 = round(rms(r2), 3)
+    rms_p1 = round(rms(p1), 3);  rms_p2 = round(rms(p2), 3)
+
+    roll_red  = round((1 - rms_r1 / rms_r2) * 100, 1) if rms_r2 > 0 else None
+    pitch_red = round((1 - rms_p1 / rms_p2) * 100, 1) if rms_p2 > 0 else None
+
+    pk_roll_dist      = round(max(abs(v) for v in r2), 2) if r2 else None
+    pk_pitch_dist     = round(max(abs(v) for v in p2), 2) if p2 else None
+    pk_roll_platform  = round(max(abs(v) for v in r1), 2) if r1 else None
+    pk_pitch_platform = round(max(abs(v) for v in p1), 2) if p1 else None
+
+    # ── Motor currents ────────────────────────────────────────────────────────
+    roll_amps  = col("motor_roll_amps")
+    pitch_amps = col("motor_pitch_amps")
+    max_roll_amps  = round(max(roll_amps),  2) if roll_amps  else None
+    max_pitch_amps = round(max(pitch_amps), 2) if pitch_amps else None
+
+    # ── Wave period detection ─────────────────────────────────────────────────
+    roll_periods  = detect_wave_periods(times, r2)
+    pitch_periods = detect_wave_periods(times, p2)
+    med_roll_period  = round(median(roll_periods),  2) if roll_periods  else None
+    med_pitch_period = round(median(pitch_periods), 2) if pitch_periods else None
+
+    # ── Command term peaks ────────────────────────────────────────────────────
+    ff_r = col("ff_roll_erpm");  ff_p = col("ff_pitch_erpm")
+    d_r  = col("d_roll_erpm");   d_p  = col("d_pitch_erpm")
+    ff_roll_max  = round(max(abs(v) for v in ff_r), 0) if ff_r else None
+    ff_pitch_max = round(max(abs(v) for v in ff_p), 0) if ff_p else None
+    d_roll_max   = round(max(abs(v) for v in d_r),  0) if d_r  else None
+    d_pitch_max  = round(max(abs(v) for v in d_p),  0) if d_p  else None
+
+    # ── Gain resolution (priority order — see module docstring) ───────────────
+    gains = dict(DEFAULTS)
+
+    if gains_json_path is None:
+        candidates = [
+            Path(csv_path).parent / "gains.json",
+            Path("gains.json"),
+        ]
+        for c in candidates:
+            if c.exists():
+                gains_json_path = str(c)
+                break
+
+    if gains_json_path and os.path.exists(gains_json_path):
+        try:
+            with open(gains_json_path) as fh:
+                loaded = json.load(fh)
+            for k in GAIN_KEYS:
+                if k in loaded:
+                    gains[k] = float(loaded[k])
+            print(f"[INFO] Gains loaded from {gains_json_path}")
+        except Exception as e:
+            print(f"[WARN] Could not read {gains_json_path}: {e}")
+    else:
+        overrides = parse_gains_from_change_log(col_str("gain_event"))
+        if overrides:
+            gains.update(overrides)
+            print(f"[INFO] Gains extracted from {len(overrides)} GAIN CHANGE entries in CSV.")
+        else:
+            print("[WARN] No gains.json found and no GAIN CHANGE entries — using defaults.")
+
+    gains_clean = {k: round(gains[k], 6) for k in GAIN_KEYS}
+
+    # ── Label / env from filename ─────────────────────────────────────────────
+    parts = stem.replace("fpd_tune_data_", "").split("_")
+    if len(parts) >= 2:
+        date_str = parts[0]
+        time_str = parts[1]
+        label = f"Run {date_str} {time_str[:2]}:{time_str[2:4]}:{time_str[4:]}"
+    else:
+        label = stem
+
+    env = guess_env(csv_path)
+
+    # ── Assemble tracker entry ────────────────────────────────────────────────
+    entry = {
+        "label":       label,
+        "env":         env,
+        "csv":         os.path.basename(csv_path),
+        "duration_s":  duration_s,
+        "hz":          loop_hz,
+        "gains":       gains_clean,
+        "results": {
+            "roll_red":          roll_red,
+            "pitch_red":         pitch_red,
+            "pk_roll":           pk_roll_dist,
+            "pk_pitch":          pk_pitch_dist,
+            "pk_roll_platform":  pk_roll_platform,
+            "pk_pitch_platform": pk_pitch_platform,
+            "r1_rms":            rms_r1,
+            "p1_rms":            rms_p1,
+            "r2_rms":            rms_r2,
+            "p2_rms":            rms_p2,
+            "roll_amps":         max_roll_amps,
+            "pitch_amps":        max_pitch_amps,
+            "ff_roll_max":       ff_roll_max,
+            "ff_pitch_max":      ff_pitch_max,
+            "d_roll_max":        d_roll_max,
+            "d_pitch_max":       d_pitch_max,
+            "med_roll_period_s":  med_roll_period,
+            "med_pitch_period_s": med_pitch_period,
+            "n_roll_cycles":      len(roll_periods),
+            "n_pitch_cycles":     len(pitch_periods),
+        },
+        "notes": (
+            f"FF roll max {ff_roll_max} ERPM  FF pitch max {ff_pitch_max} ERPM  "
+            f"D roll max {d_roll_max}  D pitch max {d_pitch_max}  "
+            f"Med wave period roll {med_roll_period}s pitch {med_pitch_period}s"
+        ),
+    }
+    return entry
+
+
+# ── Pretty summary ────────────────────────────────────────────────────────────
+
+def print_summary(entry: dict) -> None:
+    g = entry["gains"]
+    r = entry["results"]
+    print()
+    print("=" * 64)
+    print(f"  RUN : {entry['label']}  [{entry['env']}]  {entry['duration_s']}s  {entry['hz']} Hz")
+    print("=" * 64)
+    print(f"  Roll  reduction : {r['roll_red']}%   RMS {r['r2_rms']}° -> {r['r1_rms']}°   Peak dist: {r['pk_roll']}°")
+    print(f"  Pitch reduction : {r['pitch_red']}%   RMS {r['p2_rms']}° -> {r['p1_rms']}°   Peak dist: {r['pk_pitch']}°")
+    print(f"  Max amps        : roll {r['roll_amps']}A   pitch {r['pitch_amps']}A")
+    print(f"  Wave period     : roll {r['med_roll_period_s']}s ({r['n_roll_cycles']} cycles)"
+          f"   pitch {r['med_pitch_period_s']}s ({r['n_pitch_cycles']} cycles)")
+    print()
+    print("  GAINS")
+    print(f"    ROLL:  Kp={g['ROLL_GAIN']}  Ki={g['ROLL_KI']}  Kd={g['ROLL_KD']}  Kff={g['ROLL_KFF']}")
+    print(f"    PITCH: Kp={g['PITCH_GAIN']}  Ki={g['PITCH_KI']}  Kd={g['PITCH_KD']}  Kff={g['PITCH_KFF']}")
+    print(f"    MAX_D_ERPM={g['MAX_D_ERPM']}  D_α={g['D_FILTER_ALPHA']}  FF_α={g['FF_FILTER_ALPHA']}")
+    print(f"    FF_DEADBAND={g['FF_RATE_DEADBAND_DPS']} dps")
+    print("=" * 64)
+    print()
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    csv_file   = sys.argv[1]
+    gains_file = sys.argv[2] if len(sys.argv) > 2 else None
+
+    if not os.path.exists(csv_file):
+        print(f"[ERROR] File not found: {csv_file}")
+        sys.exit(1)
+
+    entry = parse_csv(csv_file, gains_file)
+    print_summary(entry)
+
+    out_json = json.dumps(entry, indent=2)
+    print("── Tracker JSON (paste into Import tab) " + "─" * 24)
+    print(out_json)
+    print("─" * 62)
+
+    out_path = csv_file.replace(".csv", "_tracker_entry.json")
+    with open(out_path, "w") as fh:
+        json.dump(entry, fh, indent=2)
+    print(f"\n[INFO] Saved to: {out_path}")
