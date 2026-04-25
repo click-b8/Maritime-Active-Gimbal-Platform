@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Environment / secrets
+*.env
+.env.*
+
+# Logs
+*.log
+
+# Runtime-generated data (not committed analysis or data/)
+# Exclude CSVs and PNGs created at runtime in firmware/ or root
+fpd_tune_data_*.csv
+ff_control_data_*.csv
+pd_control_data_*.csv
+*_data_????????_??????.csv
+*_analysis.png
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
