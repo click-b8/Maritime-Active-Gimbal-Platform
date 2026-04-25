@@ -1,7 +1,7 @@
 # Maritime Active Gimbal Platform
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)
-![Platform](https://img.shields.io/badge/Platform-NVIDIA%20Jetson-green?logo=nvidia)
+![Platform](https://img.shields.io/badge/Platform-NVIDIA%20Jetson%20Orin%20Nano-green?logo=nvidia)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 ![Status](https://img.shields.io/badge/Status-Active%20Development-orange)
 ![University](https://img.shields.io/badge/University-Florida%20Atlantic%20University-blue)
@@ -22,12 +22,14 @@
 2. [Hardware Setup](#hardware-setup)
 3. [Software Architecture](#software-architecture)
 4. [Quick Start](#quick-start)
-5. [Gain Tuning](#gain-tuning)
-6. [Data & Results](#data--results)
-7. [Repo Structure](#repo-structure)
-8. [Communication Protocol](#communication-protocol)
-9. [Team & Acknowledgments](#team--acknowledgments)
-10. [License](#license)
+5. [System State Machine](#system-state-machine)
+6. [Gain Tuning](#gain-tuning)
+7. [Data & Results](#data--results)
+8. [Repo Structure](#repo-structure)
+9. [Communication Protocol](#communication-protocol)
+10. [Team & Acknowledgments](#team--acknowledgments)
+11. [References](#references)
+12. [License](#license)
 
 ---
 
@@ -36,6 +38,9 @@
 Autonomous drone delivery and retrieval at sea requires a stable landing zone. Wave-induced vessel motion introduces continuous roll and pitch disturbances that exceed safe drone landing tolerances. This platform solves that problem.
 
 A two-axis gimbal driven by direct-drive torque motors actively counteracts vessel motion in real time, maintaining the landing deck within **±2° of horizontal** across **±15° sea-state disturbances**.
+
+![Full system deployed on the Owltonomous WAM-V at FAU](media/full_system_on_WAM-V.png)
+*Full system deployed on the Owltonomous WAM-V at FAU*
 
 ### Key Specs
 
@@ -46,8 +51,8 @@ A two-axis gimbal driven by direct-drive torque motors actively counteracts vess
 | Disturbance rejection | ±15° sea-state |
 | Platform accuracy | < 2° RMS |
 | Actuators | CubeMars AK60-39 V3.0 (×2) |
-| IMU | BNO08x MEMS (×2) |
-| Compute | NVIDIA Jetson (Ubuntu) |
+| IMU | BNO085 MEMS (×2) |
+| Compute | NVIDIA Jetson Orin Nano (Ubuntu) |
 | Supply voltage | 22 V |
 | Control law | FF + PID (feedforward from hull IMU + PID from platform IMU) |
 
@@ -70,12 +75,13 @@ erpm = SIGN × (Kp × imu1_angle + Ki × ∫imu1_angle + Kd × imu1_rate + Kff �
 
 | Component | Part | Qty |
 |---|---|---|
-| Compute | NVIDIA Jetson (Ubuntu) | 1 |
-| Platform IMU | BNO08x (I²C) | 1 |
-| Hull IMU | BNO08x (I²C) | 1 |
+| Compute | NVIDIA Jetson Orin Nano (Ubuntu) | 1 |
+| Platform IMU | BNO085 (I²C) | 1 |
+| Hull IMU | BNO085 (I²C) | 1 |
 | Roll actuator | CubeMars AK60-39 V3.0 | 1 |
 | Pitch actuator | CubeMars AK60-39 V3.0 | 1 |
 | USB-UART adapters | CH340 / FTDI | 2 |
+| CAN transceiver | Waveshare SN65HVD230 CAN Board | 1 |
 | Power supply | 22 V regulated | 1 |
 
 ### Wiring & Port Map
@@ -84,8 +90,8 @@ erpm = SIGN × (Kp × imu1_angle + Ki × ∫imu1_angle + Kd × imu1_rate + Kff �
 |---|---|---|
 | Roll motor | CubeMars AK60-39 | `/dev/ttyROLL` (USB-UART symlink) |
 | Pitch motor | CubeMars AK60-39 | `/dev/ttyPITCH` (USB-UART symlink) |
-| Platform IMU (IMU1) | BNO08x | I²C bus 7 |
-| Hull IMU (IMU2) | BNO08x | I²C bus 1 |
+| Platform IMU (IMU1) | BNO085 | I²C bus 7 |
+| Hull IMU (IMU2) | BNO085 | I²C bus 1 |
 
 ### Motor Direction Signs
 
@@ -114,6 +120,11 @@ ssh edg5@172.20.10.10
 ### UART Settings
 
 Baud: `921600` | Format: `8N1` | Protocol: CubeMars AK series (NOT VESC)
+
+### Assembly
+
+![SolidWorks full integrated assembly](media/CAD_full_integrated_assembly.webp)
+*SolidWorks full integrated assembly*
 
 ---
 
@@ -146,7 +157,7 @@ All runnable scripts live in `firmware/`. Install dependencies with `pip install
 
 | Script | Purpose |
 |---|---|
-| `imu_sensor.py` | BNO08x HAL. I²C read, rotation vector + gyro, fallback to single-IMU on bus failure. |
+| `imu_sensor.py` | BNO085 HAL. I²C read, rotation vector + gyro, fallback to single-IMU on bus failure. |
 | `serial_motor_driver.py` | CubeMars UART HAL. Frame build/parse, CRC16, ERPM/torque/position commands, telemetry parse. |
 | `pd_controller.py` | Reusable PD controller class with derivative filter. Imported by several main scripts. |
 
@@ -229,6 +240,29 @@ python3 firmware/parse_fpd_run.py fpd_tune_data_20260409_143022.csv
 
 ---
 
+## System State Machine
+
+The platform operates a 4-state machine that coordinates stabilization with the drone landing sequence. The controller transitions through states based on drone communication signals and platform stability status.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                                                             │
+│   State 1          State 2           State 3       State 4  │
+│  Waiting For  ──►  Stabilizing  ──►  Drone Wait  ──►  Land  │
+│  Drone Signal                        for Confirm     Drone  │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+| State | Name | Description |
+|---|---|---|
+| **1** | Waiting For Drone Signal | Gimbal is idle. Control loop running but awaiting drone approach signal before entering active stabilization mode. |
+| **2** | Stabilizing | Active 200 Hz FF+PID loop engaged. Platform actively countering vessel motion. System works to hold within ±2° tolerance. |
+| **3** | Drone Waiting for Confirmation to Land | Platform is stable and within tolerance. Drone holds position overhead awaiting a go/no-go confirmation from the platform controller. |
+| **4** | Landing Drone | Confirmation issued. Drone executes landing sequence onto the stabilized platform. |
+
+---
+
 ## Gain Tuning
 
 ### gains.json Parameter Reference
@@ -286,6 +320,17 @@ python3 firmware/parse_fpd_run.py fpd_tune_data_20260409_143022.csv
 | Pool tests | FAU pool, controlled 0.5–1 Hz sinusoidal disturbances | `data/pool_tests/` |
 | Wave tank | FAU wave tank, programmatic sea-state waveforms | `data/wavetank/` |
 | WAM-V vessel | Open water on WAM-V USV at FAU marine facility | `data/wamv/` |
+
+### Experimental Results
+
+Settling time measured as time from disturbance onset to platform returning within ±2° and holding.
+
+| Axis | Disturbance Cycles | Median Settling Time | Min | Max |
+|---|---|---|---|---|
+| Roll | 45 | 0.97 s | 0.63 s | 13.80 s |
+| Pitch | 167 | 0.92 s | 0.55 s | 5.15 s |
+
+The long-tail max values reflect occasional large-amplitude or compound disturbances. Median performance is consistent across both axes at sub-1-second settling.
 
 ### Controller Development Progression
 
@@ -353,6 +398,8 @@ Maritime-Active-Gimbal-Platform/
 │
 ├── hardware/                        # Hardware design files (CAD, schematics)
 ├── media/                           # Photos and video
+│   ├── full_system_on_WAM-V.png     # System on Owltonomous WAM-V
+│   └── CAD_full_integrated_assembly.webp  # SolidWorks assembly render
 │
 ├── requirements.txt
 ├── .gitignore
@@ -410,12 +457,36 @@ CRC16 example verification (from manual pages 57–58):
 
 ## Team & Acknowledgments
 
-**Noah Brande** — Controls & Software Engineer  
-Florida Atlantic University  
-College of Engineering & Computer Science  
+### Project Participants
+
+**Florida Atlantic University — College of Engineering & Computer Science**  
 Senior Design Capstone — Class of 2026
 
-Special thanks to the FAU Marine & Environmental Systems department for wave tank and WAM-V vessel access.
+| Name | Role |
+|---|---|
+| Dr. Oscar M. Curet | Faculty Advisor |
+| Joshua Masturzo | Team Member |
+| Leoni Felton-Montanez | Team Member |
+| Daniel Lora | Team Member |
+| Nyasha Obrien | Team Member |
+| Renzo Boeri | Team Member |
+| **Noah Brande** | **Controls & Software Engineer** |
+| Daniel Granda | Team Member |
+| Dr. Bing | Team Member |
+
+### Special Thanks
+
+Dr. William Edward Hahn · MPCR Labs · Dr. David Illig · Mr. Derek Alley · William Fairman · SeaTech WAM-V Team · Vitas Diktanas · Dr. Manhar R. Dhanak · Dr. Pak Cheung Edgar An
+
+---
+
+## References
+
+1. NVIDIA Corp., "Jetson Orin Nano Developer Kit Hardware Specifications," *NVIDIA Developer Documentation*, 2024.
+2. Adafruit Industries, "BNO085 Nine-Axis Configuration Support," *Adafruit Product ID: 4397*, 2023.
+3. Waveshare Electronics, "SN65HVD230 CAN Board Interface and Technical Data," *Waveshare Wiki*, 2024.
+4. B. Xu et al., "Design and Control of a 2-DOF Stabilization Platform for UAV Sea-Landing," *IEEE ICMA*, 2016, pp. 1124–1129.
+5. CubeMars Robotics, "AK60-39 V3.0 KV80 Integrated Power Module Product Manual," 2025.
 
 ---
 
